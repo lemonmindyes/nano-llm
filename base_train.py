@@ -35,7 +35,7 @@ if __name__ == '__main__':
     warmup_ratio = 0.03
     log_steps = 100
     save_steps = 100
-    save_path = './'
+    save_path = './pretrain.bin'
 
     tokenizer = get_tokenizer()
 
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     warmup_steps = math.ceil(warmup_ratio * total_steps)
 
     scaler = torch.amp.GradScaler(enabled=(dtype == torch.float16))
-    opt = torch.optim.Muon(model.parameters(), lr=max_lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=max_lr)
     loss_func = nn.CrossEntropyLoss(reduction='none')
 
     try:
@@ -77,6 +77,8 @@ if __name__ == '__main__':
     while step < total_steps:
         start_time = time.time()
         for _, (x, y, loss_mask) in enumerate(train_dataloader):
+            if step >= total_steps:
+                break
             x, y, loss_mask = x.to(device), y.to(device), loss_mask.to(device)
             for param_group in opt.param_groups:
                 param_group['lr'] = get_lr(step, warmup_steps, total_steps, max_lr, min_lr)
@@ -111,8 +113,8 @@ if __name__ == '__main__':
                     'scaler': scaler.state_dict(),
                     'step': step
                 }
-                torch.save(checkpoint, 'pretrain1.bin.tmp')
-                os.replace('pretrain1.bin.tmp', f'pretrain1.bin')
+                torch.save(checkpoint, f'{save_file}.tmp')
+                os.replace(f'{save_file}.tmp', f'{save_file}')
             step += 1
 
     checkpoint = {
@@ -121,5 +123,5 @@ if __name__ == '__main__':
         'scaler': scaler.state_dict(),
         'step': step
     }
-    torch.save(checkpoint, 'pretrain1.bin.tmp')
-    os.replace('pretrain1.bin.tmp', f'pretrain1.bin')
+    torch.save(checkpoint, f'{save_file}.tmp')
+    os.replace(f'{save_file}.tmp', f'{save_file}')

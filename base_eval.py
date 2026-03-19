@@ -24,7 +24,7 @@ if __name__ == '__main__':
     config = GPTConfig()
     config.vocab_size = len(tokenizer)
     model = GPT(config).to(device=device)
-    model.load_state_dict(torch.load('pretrain1.bin', map_location=device)['model'])
+    model.load_state_dict(torch.load('pretrain.bin', map_location=device)['model'])
 
     loss_func = nn.CrossEntropyLoss(reduction='none')
     model.eval()
