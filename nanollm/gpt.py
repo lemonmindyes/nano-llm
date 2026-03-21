@@ -8,11 +8,11 @@ import torch.nn.functional as F
 @dataclass
 class GPTConfig:
     vocab_size: int = 32768
-    max_seq_len: int = 256
-    model_dim: int = 512
-    n_layers: int = 8
-    n_heads: int = 8
-    n_kv_heads: int = 4
+    max_seq_len: int = 384
+    model_dim: int = 640
+    n_layers: int = 12
+    n_heads: int = 10
+    n_kv_heads: int = 5
     head_dim: int = 64
 
 
@@ -196,7 +196,7 @@ class GPT(nn.Module):
         ids = torch.tensor([tokens], dtype=torch.long, device=device)
         for _ in range(max_tokens):
             logits = self.forward(ids)
-            logits =logits[:, -1, :]
+            logits = logits[:, -1, :]
             if top_k is not None and top_k > 0:
                 v, _ = torch.topk(logits, min(top_k, logits.shape[-1]))
                 logits[logits < v[:, [-1]]] = -float('Inf')

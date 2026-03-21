@@ -6,7 +6,7 @@ from contextlib import nullcontext
 import torch
 import torch.nn as nn
 
-from nanollm.dataloader import TinyStoriesDataset, tiny_stories_dataloader
+from nanollm.dataloader import ClimbMixDataset, climb_mix_dataloader
 from nanollm.gpt import GPTConfig, GPT
 from nanollm.tokenizer import get_tokenizer
 
@@ -30,7 +30,8 @@ if __name__ == '__main__':
     batch_size = 32
     max_lr = 5e-4
     min_lr = 5e-5
-    epoch = 1
+    epoch = 10
+    buffer_size = 4
     accumulation_steps = 1
     warmup_ratio = 0.03
     log_steps = 100
@@ -47,18 +48,18 @@ if __name__ == '__main__':
     total_params = sum(p.numel() for p in model.parameters())
     print(total_params)
 
-    train_dataset = TinyStoriesDataset(
-        'D:/think-dataset/TinyStories',
-        tokenizer=tokenizer,
-        max_seq_len=config.max_seq_len + 1,
-        split='train',
+    train_dataset = ClimbMixDataset(
+        'D:/think-dataset/climbmix-400b-shuffle',
+        buffer_size=buffer_size
     )
-    train_dataloader = tiny_stories_dataloader(
+    train_dataloader = climb_mix_dataloader(
         train_dataset,
+        tokenizer=tokenizer,
+        max_seq_len=config.max_seq_len+1,
         batch_size=batch_size
     )
 
-    total_steps = epoch * len(train_dataloader) * accumulation_steps
+    total_steps = 200000
     warmup_steps = math.ceil(warmup_ratio * total_steps)
 
     scaler = torch.amp.GradScaler(enabled=(dtype == torch.float16))
@@ -66,7 +67,7 @@ if __name__ == '__main__':
     loss_func = nn.CrossEntropyLoss(reduction='none')
 
     try:
-        checkpoint = torch.load(f'{save_path}/pretrain1.bin', map_location=device)
+        checkpoint = torch.load(f'{save_path}', map_location=device)
         model.load_state_dict(checkpoint['model'])
         opt.load_state_dict(checkpoint['opt'])
         scaler.load_state_dict(checkpoint['scaler'])
@@ -74,8 +75,9 @@ if __name__ == '__main__':
         checkpoint = {'step': 0}
 
     step = checkpoint['step']
+    start_time = time.time()
     while step < total_steps:
-        start_time = time.time()
+        print(f'current train_dataloader length:{len(train_dataloader)}')
         for _, (x, y, loss_mask) in enumerate(train_dataloader):
             if step >= total_steps:
                 break
@@ -113,9 +115,12 @@ if __name__ == '__main__':
                     'scaler': scaler.state_dict(),
                     'step': step
                 }
-                torch.save(checkpoint, f'{save_file}.tmp')
-                os.replace(f'{save_file}.tmp', f'{save_file}')
+                torch.save(checkpoint, f'{save_path}.tmp')
+                os.replace(f'{save_path}.tmp', f'{save_path}')
             step += 1
+        if step < total_steps:
+            train_dataset.load_data()
+            print(f'load new data')
 
     checkpoint = {
         'model': model.state_dict(),
@@ -123,5 +128,5 @@ if __name__ == '__main__':
         'scaler': scaler.state_dict(),
         'step': step
     }
-    torch.save(checkpoint, f'{save_file}.tmp')
-    os.replace(f'{save_file}.tmp', f'{save_file}')
+    torch.save(checkpoint, f'{save_path}.tmp')
+    os.replace(f'{save_path}.tmp', f'{save_path}')
