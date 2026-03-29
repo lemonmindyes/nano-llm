@@ -8,7 +8,7 @@ import torch.nn.functional as F
 @dataclass
 class GPTConfig:
     vocab_size: int = 32768
-    max_seq_len: int = 384
+    max_seq_len: int = 300
     model_dim: int = 640
     n_layers: int = 12
     n_heads: int = 10
