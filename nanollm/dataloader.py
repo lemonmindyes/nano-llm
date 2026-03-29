@@ -6,7 +6,7 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 
 
-# https://huggingface.co/datasets/karpathy/c
+# https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle
 class ClimbMixDataset(Dataset):
     def __init__(self, data_path, buffer_size):
         super().__init__()
