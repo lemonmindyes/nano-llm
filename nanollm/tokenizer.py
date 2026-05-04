@@ -1,25 +1,40 @@
 import os
+from pathlib import Path
 
 from transformers import AutoTokenizer
 
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
 
-def get_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
-    special_tokens = {
-        'bos_token': '<|bos|>',
-        'eos_token': '<|eos|>',
-        'pad_token': '<|pad|>',
-        'extra_special_tokens': [
-            '<|system_start|>',
-            '<|system_end|>',
-            '<|user_start|>',
-            '<|user_end|>',
-            '<|assistant_start|>',
-            '<|assistant_end|>',
-        ]
-    }
-    tokenizer.add_special_tokens(special_tokens)
+SPECIAL_TOKENS = {
+    'bos_token': '<|bos|>',
+    'eos_token': '<|eos|>',
+    'pad_token': '<|pad|>',
+    'extra_special_tokens': [
+        '<|system_start|>',
+        '<|system_end|>',
+        '<|user_start|>',
+        '<|user_end|>',
+        '<|assistant_start|>',
+        '<|assistant_end|>',
+    ]
+}
+
+
+def get_tokenizer(tokenizer_path: str = None):
+    if tokenizer_path is not None:
+        tokenizer_path = Path(tokenizer_path)
+
+        if not tokenizer_path.exists():
+            raise FileNotFoundError(f"Tokenizer path does not exist: {tokenizer_path}")
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_path,
+            local_files_only=True,
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
+
+    tokenizer.add_special_tokens(SPECIAL_TOKENS)
     return tokenizer
 
 
