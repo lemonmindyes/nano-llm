@@ -6,22 +6,38 @@ from pathlib import Path
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 
 # https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle
 class ClimbMixDataset(Dataset):
-    def __init__(self, data_path, buffer_size):
+    def __init__(self, data_path, buffer_size=5, seed=42):
         super().__init__()
-        self.data_list = [f'{data_path}/{v}' for v in os.listdir(data_path)]
-        self.buffer_size = buffer_size
-        self.data = []
-        self.load_data()
+        self.data_list = [
+            f'{data_path}/{v}'
+            for v in os.listdir(data_path)
+            if v.endswith('.parquet')
+        ]
+        self.data_list = sorted(self.data_list)
 
-    def load_data(self):
-        data_list = random.sample(self.data_list, k=min(self.buffer_size, len(self.data_list)))
+        self.buffer_size = buffer_size
+        self.seed = seed
+        self.data = []
+        self.load_data(buffer_round=0)
+
+    def load_data(self, buffer_round=0):
+        rng = random.Random(self.seed + buffer_round)
+
+        data_list = rng.sample(
+            self.data_list,
+            k=min(self.buffer_size, len(self.data_list))
+        )
+
         self.data = []
         for path in data_list:
-            self.data.extend(pd.read_parquet(path).loc[:, 'text'].tolist())
+            self.data.extend(
+                pd.read_parquet(path).loc[:, 'text'].tolist()
+            )
 
     def __len__(self):
         return len(self.data)
@@ -54,14 +70,26 @@ def collate_fn_pretrain(batch, tokenizer, max_seq_len):
     return x, y, loss_mask
 
 
-def climb_mix_dataloader(ClimbMixDataset, tokenizer, max_seq_len, batch_size=32):
-    return DataLoader(ClimbMixDataset,
-                      batch_size=batch_size,
-                      shuffle=True,
-                      drop_last=True,
-                      num_workers=4,
-                      collate_fn=partial(collate_fn_pretrain, tokenizer=tokenizer, max_seq_len=max_seq_len)
-                      )
+def climb_mix_dataloader(dataset, tokenizer, max_seq_len, batch_size=32, ddp=False, rank=0, world_size=1, seed=42):
+    if ddp:
+        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
+                                     shuffle=True, drop_last=True, seed=seed
+                                     )
+        shuffle = False
+    else:
+        sampler = None
+        shuffle = True
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        sampler=sampler,
+        drop_last=True,
+        num_workers=4,
+        collate_fn=partial(collate_fn_pretrain, tokenizer=tokenizer, max_seq_len=max_seq_len)
+    )
+    return loader, sampler
 
 
 class SmolTalkGSM8KDataset(Dataset):
