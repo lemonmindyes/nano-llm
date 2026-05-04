@@ -31,7 +31,7 @@ def save_checkpoint(model, optimizer, step, config, vocab_size, save_path, ddp, 
             optimizer,
             options=StateDictOptions(
                 full_state_dict=True,
-                rank0_only=True
+                cpu_offload=True,
             )
         )
     else:
