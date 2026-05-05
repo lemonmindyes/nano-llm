@@ -193,25 +193,75 @@ class GPT(nn.Module):
         return logits
 
     @torch.inference_mode()
-    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, seed=42):
+    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, top_p=None, seed=42):
         device = self.get_device()
+
+        kv_cache = KVCache(
+            batch_size=1,
+            n_kv_heads=self.config.n_kv_heads,
+            max_seq_len=self.config.max_seq_len,
+            head_dim=self.config.head_dim,
+            n_layers=self.config.n_layers,
+            device=device,
+            dtype=next(self.parameters()).dtype
+        )
+
         rng = None
         if temperature > 0:
             rng = torch.Generator(device=device)
             rng.manual_seed(seed)
+
         ids = torch.tensor([tokens], dtype=torch.long, device=device)
-        for _ in range(max_tokens):
-            logits = self.forward(ids)
-            logits = logits[:, -1, :]
-            if top_k is not None and top_k > 0:
-                v, _ = torch.topk(logits, min(top_k, logits.shape[-1]))
-                logits[logits < v[:, [-1]]] = -float('Inf')
+
+        # Prefill prompt
+        logits = self.forward(ids, kv_cache=kv_cache)
+        logits = logits[:, -1, :]
+
+        for step in range(max_tokens):
             if temperature > 0:
                 logits = logits / temperature
+
+                if top_k is not None and top_k > 0:
+                    v, _ = torch.topk(logits, min(top_k, logits.shape[-1]))
+                    logits[logits < v[:, [-1]]] = -float('Inf')
+
+                if top_p is not None and top_p > 0:
+                    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+
+                    sorted_probs = F.softmax(sorted_logits, dim=-1)
+                    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                    # Remove tokens whose cumulative probability is above top_p.
+                    sorted_remove_mask = cumulative_probs > top_p
+
+                    # Keep at least the first token above the threshold.
+                    sorted_remove_mask[..., 1:] = sorted_remove_mask[..., :-1].clone()
+                    sorted_remove_mask[..., 0] = False
+
+                    remove_mask = torch.zeros_like(logits, dtype=torch.bool)
+                    remove_mask.scatter_(
+                        dim=-1,
+                        index=sorted_indices,
+                        src=sorted_remove_mask,
+                    )
+
+                    logits = logits.masked_fill_(
+                        remove_mask,
+                        -float("Inf")
+                    )
+
                 probs = F.softmax(logits, dim=-1)
                 next_ids = torch.multinomial(probs, num_samples=1, generator=rng)
             else:
                 next_ids = torch.argmax(logits, dim=-1, keepdim=True)
-            ids = torch.cat((ids, next_ids), dim=1)
+
             token = next_ids.item()
             yield token
+
+            # No need to run another forward after the last generated token.
+            if step == max_tokens - 1:
+                break
+
+            # Decode one new token and update KV cache.
+            logits = self.forward(next_ids, kv_cache=kv_cache)
+            logits = logits[:, -1, :]
