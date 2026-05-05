@@ -19,7 +19,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 
-from nanollm.dataloader import ClimbMixDataset, climb_mix_dataloader
+from nanollm.dataloader import SmolTalkGSM8KDataset, smoltalk_gsm8k_dataloader
 from nanollm.gpt import GPTConfig, GPT, Block
 from nanollm.tokenizer import get_tokenizer
 
@@ -100,19 +100,20 @@ def main():
         logger.info(f"Tokenizer: EleutherAI/gpt-neox-20b  |  Vocab size: {vocab_size}")
 
     # Hyperparameters
-    max_seq_len = 512
+    max_seq_len = 1024
     micro_batch = 4
-    target_tokens = 118_433_280 * 20
+    target_tokens = 118_433_280 * 1
     grad_accum = max(1, 256 // (world_size * micro_batch))
     global_batch_tokens = world_size * micro_batch * grad_accum * max_seq_len
     total_steps = target_tokens // global_batch_tokens
-    warmup_ratio = 0.03
+    warmup_ratio = 0.01
     warmup_steps = int(warmup_ratio * total_steps)
-    lr = 5e-4
+    lr = 5e-5
     weight_decay = 0.1
     log_steps = 100
     save_steps = 1000
-    save_path = 'model/pretrain_1.bin'
+    pretrain_model_path = 'model/pretrain_1.bin'
+    save_path = 'model/sft_1.bin'
 
     if master:
         logger.info(
@@ -133,6 +134,7 @@ def main():
     amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
 
     model = GPT(config)
+    model.load_state_dict(torch.load(pretrain_model_path, map_location="cpu", weights_only=False)["model"])
 
     if ddp:
         mp_policy = MixedPrecision(
@@ -190,12 +192,12 @@ def main():
             logger.info(f"Resuming from step {start_step:,}")
 
     # Dataset | Dataloader
-    train_dataset = ClimbMixDataset(
-        '/root/autodl-tmp/climbmix-400b-shuffle/train',
+    train_dataset = SmolTalkGSM8KDataset(
+        '/root/autodl-tmp/SmolTalk-GSM8K',
         buffer_size=5
     )
     train_dataset.load_data(buffer_round)
-    train_loader, train_sampler = climb_mix_dataloader(
+    train_loader, train_sampler = smoltalk_gsm8k_dataloader(
         train_dataset,
         tokenizer=tokenizer,
         max_seq_len=max_seq_len+1,
@@ -295,7 +297,7 @@ def main():
         if step < total_steps:
             buffer_round += 1
             train_dataset.load_data(buffer_round)
-            train_loader, train_sampler = climb_mix_dataloader(
+            train_loader, train_sampler = smoltalk_gsm8k_dataloader(
                 train_dataset, tokenizer, max_seq_len+1, micro_batch, ddp, rank, world_size
             )
             if master:
