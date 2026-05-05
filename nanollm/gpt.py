@@ -7,8 +7,8 @@ import torch.nn.functional as F
 
 @dataclass
 class GPTConfig:
-    vocab_size: int = 32768
-    max_seq_len: int = 300
+    vocab_size: int = 50286
+    max_seq_len: int = 512
     model_dim: int = 640
     n_layers: int = 12
     n_heads: int = 10
@@ -47,8 +47,12 @@ class CausalSelfAttention(nn.Module):
         self.n_kv_heads = config.n_kv_heads
         self.model_dim = config.model_dim
         self.head_dim = config.head_dim
-        assert self.model_dim % self.n_heads == 0, f'model_dim must be divisible by n_heads'
-        assert self.n_kv_heads <= self.n_heads and self.n_heads % self.n_kv_heads == 0
+        assert self.n_heads * self.head_dim == self.model_dim, (
+            f"model_dim must equal n_heads * head_dim"
+        )
+        assert self.n_kv_heads <= self.n_heads and self.n_heads % self.n_kv_heads == 0, (
+            f"n_kv_heads must be <= n_heads and n_heads must be divisible by n_kv_heads"
+        )
         self.to_q = nn.Linear(self.model_dim, self.n_heads * self.head_dim, bias=False)
         self.to_k = nn.Linear(self.model_dim, self.n_kv_heads * self.head_dim, bias=False)
         self.to_v = nn.Linear(self.model_dim, self.n_kv_heads * self.head_dim, bias=False)
@@ -132,8 +136,10 @@ class GPT(nn.Module):
         self.to_out = nn.Linear(config.model_dim, config.vocab_size, bias=False)
 
         cos, sin = self._precompute_rotary_embeddings(config.max_seq_len, config.head_dim)
-        self.register_buffer('cos', cos)
-        self.register_buffer('sin', sin)
+        self.register_buffer('cos', cos, persistent=False)
+        self.register_buffer('sin', sin, persistent=False)
+
+        self.init_weights()
 
     @torch.no_grad()
     def init_weights(self):
