@@ -238,16 +238,24 @@ def collate_fn_sft(batch, tokenizer, max_seq_len):
 
             end_ptr = 0
 
+            # For each assistant_start, find the nearest following assistant_end.
+            # If the end token is missing, use valid_len to support truncated samples.
             for s in starts:
+                # Ignore end tokens that are before or at the current start token.
                 while end_ptr < len(ends) and ends[end_ptr] <= s:
                     end_ptr += 1
+
+                # Use the next valid end token, or the sequence end if none exists.
                 if end_ptr < len(ends):
                     e = ends[end_ptr]
                     end_ptr += 1
                 else:
                     e = valid_len
+
+                # Enable loss only for tokens inside the assistant response span:
+                # after assistant_start and before assistant_end.
                 if s + 1 < e:
-                    loss_mask[i, s + 1:e] = True
+                    loss_mask[i, s + 1:e + 1] = True
 
         loss_mask = loss_mask & attention_mask.bool()
         return loss_mask
@@ -309,6 +317,7 @@ if __name__ == '__main__':
     smoltalk_gsm8k_dataset = SmolTalkGSM8KDataset(
         'D:/think-dataset/SmolTalk-GSM8K'
     )
+    smoltalk_gsm8k_dataset.load_data(buffer_round=0)
 
     train_dataloader, train_sampler = smoltalk_gsm8k_dataloader(smoltalk_gsm8k_dataset,
                                                  tokenizer,
@@ -317,7 +326,7 @@ if __name__ == '__main__':
                                                  )
     print(len(train_dataloader))
     for i, (x, y, loss_mask) in enumerate(train_dataloader):
-        idx = 1
+        idx = 0
         print(tokenizer.decode(y[idx]))
         print('========================================')
         print(tokenizer.decode(y[idx][loss_mask[idx]]))
