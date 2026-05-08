@@ -100,9 +100,9 @@ def main():
         logger.info(f"Tokenizer: EleutherAI/gpt-neox-20b  |  Vocab size: {vocab_size}")
 
     # Hyperparameters
-    max_seq_len = 512
+    max_seq_len = 1024
     micro_batch = 4
-    target_tokens = 118_433_280 * 20
+    target_tokens = 1_036_855_296 * 20
     grad_accum = max(1, 256 // (world_size * micro_batch))
     global_batch_tokens = world_size * micro_batch * grad_accum * max_seq_len
     total_steps = target_tokens // global_batch_tokens
@@ -111,8 +111,8 @@ def main():
     lr = 5e-4
     weight_decay = 0.1
     log_steps = 100
-    save_steps = 1000
-    save_path = 'model/pretrain_1.bin'
+    save_steps = 500
+    save_path = 'model/pretrain/nano-llm-pro.bin'
 
     if master:
         logger.info(
@@ -124,15 +124,16 @@ def main():
     config = GPTConfig()
     config.vocab_size = vocab_size
     config.max_seq_len = max_seq_len
-    config.model_dim = 640
-    config.n_layers = 12
-    config.n_heads = 10
-    config.n_kv_heads = 5
+    config.model_dim = 1536
+    config.n_layers = 34
+    config.n_heads = 12
+    config.n_kv_heads = 6
+    config.head_dim = 128
 
     bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
 
-    model = GPT(config)
+    model = GPT(config, dtype=amp_dtype, device=device)
 
     if ddp:
         mp_policy = MixedPrecision(
@@ -140,12 +141,12 @@ def main():
             reduce_dtype=amp_dtype,
             buffer_dtype=amp_dtype,
         )
-        warp_policy = ModuleWrapPolicy({Block})
+        wrap_policy = ModuleWrapPolicy({Block})
         model = FSDP(
             model,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
             mixed_precision=mp_policy,
-            auto_wrap_policy=warp_policy,
+            auto_wrap_policy=wrap_policy,
             device_id=local_rank
         )
     else:
@@ -188,6 +189,8 @@ def main():
         buffer_round = ckpt.get("buffer_round", 0)
         if master:
             logger.info(f"Resuming from step {start_step:,}")
+    ori_model = model
+    model = torch.compile(model, dynamic=False)
 
     # Dataset | Dataloader
     train_dataset = ClimbMixDataset(
@@ -239,7 +242,7 @@ def main():
             sync_ctx = (
                 nullcontext()
                 if (not ddp or is_accum_last)
-                else model.no_sync()
+                else ori_model.no_sync()
             )
 
             with sync_ctx, amp_ctx:
@@ -260,9 +263,9 @@ def main():
                 continue
 
             if ddp:
-                grad_norm = model.clip_grad_norm_(1.0)
+                grad_norm = ori_model.clip_grad_norm_(1.0)
             else:
-                grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                grad_norm = nn.utils.clip_grad_norm_(ori_model.parameters(), max_norm=1.0)
 
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -287,7 +290,7 @@ def main():
 
             if step % save_steps == 0:
                 save_checkpoint(
-                    model, optimizer, step, config, vocab_size, save_path, ddp, master, buffer_round
+                    ori_model, optimizer, step, config, vocab_size, save_path, ddp, master, buffer_round
                 )
                 if ddp:
                     dist.barrier(device_ids=[local_rank])
@@ -302,7 +305,7 @@ def main():
                 logger.info("load new data buffer")
 
     if step > start_step and step % save_steps != 0:
-        save_checkpoint(model, optimizer, step, config, vocab_size, save_path, ddp, master, buffer_round)
+        save_checkpoint(ori_model, optimizer, step, config, vocab_size, save_path, ddp, master, buffer_round)
         if ddp:
             dist.barrier(device_ids=[local_rank])
 
