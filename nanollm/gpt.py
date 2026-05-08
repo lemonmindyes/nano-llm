@@ -127,15 +127,17 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, dtype=torch.bfloat16, device=None):
         super().__init__()
         self.config = config
+        self.dtype = dtype
+        self.device = device
 
         self.token_embedding = nn.Embedding(config.vocab_size, config.model_dim)
         self.transformer = nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layers)])
         self.to_out = nn.Linear(config.model_dim, config.vocab_size, bias=False)
 
-        cos, sin = self._precompute_rotary_embeddings(config.max_seq_len, config.head_dim)
+        cos, sin = self._precompute_rotary_embeddings(config.max_seq_len, config.head_dim, device=device, dtype=dtype)
         self.register_buffer('cos', cos, persistent=False)
         self.register_buffer('sin', sin, persistent=False)
 
@@ -157,15 +159,17 @@ class GPT(nn.Module):
             nn.init.uniform_(block.mlp.linear1.weight, -s, s)
             nn.init.zeros_(block.mlp.linear2.weight)
 
-    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
+    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None, dtype=torch.bfloat16):
         if device is None:
-            pass
+            device = self.get_device()
         channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
         inv_freq = 1.0 / (base ** (channel_range / head_dim))
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
         # calculate (time, channel) pair
         freqs = torch.outer(t, inv_freq)
         cos, sin = freqs.cos(), freqs.sin()
+        cos = cos.to(device=device, dtype=dtype)
+        sin = sin.to(device=device, dtype=dtype)
         cos, sin = cos[None, :, None, :], sin[None, :, None, :]
         return cos, sin
 
