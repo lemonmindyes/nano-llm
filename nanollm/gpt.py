@@ -197,7 +197,8 @@ class GPT(nn.Module):
         return logits
 
     @torch.inference_mode()
-    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, top_p=None, seed=42):
+    def generate(self, tokens, max_tokens, temperature=1.0, top_k=None, top_p=None,
+                 frequency_penalty=0.0, penalize_prompt=True, seed=42):
         device = self.get_device()
 
         kv_cache = KVCache(
@@ -221,16 +222,31 @@ class GPT(nn.Module):
         logits = self.forward(ids, kv_cache=kv_cache)
         logits = logits[:, -1, :]
 
+        token_counts = None
+        if frequency_penalty > 0.0:
+            token_counts = torch.zeros(1, logits.shape[-1], dtype=logits.dtype, device=device)
+
+            # Optionally count prompt tokens too.
+            # This discourages the model from repeatedly copying the prompt.
+            if penalize_prompt:
+                token_counts.scatter_add_(dim=-1, index=ids, src=torch.ones_like(ids, dtype=token_counts.dtype))
+
         for step in range(max_tokens):
+            sample_logits = logits.clone()
+
+            # Frequency penalty
+            if token_counts is not None:
+                sample_logits = sample_logits - frequency_penalty * token_counts
+
             if temperature > 0:
-                logits = logits / temperature
+                sample_logits = sample_logits / temperature
 
                 if top_k is not None and top_k > 0:
-                    v, _ = torch.topk(logits, min(top_k, logits.shape[-1]))
-                    logits[logits < v[:, [-1]]] = -float('Inf')
+                    v, _ = torch.topk(sample_logits, min(top_k, sample_logits.shape[-1]))
+                    sample_logits[sample_logits < v[:, [-1]]] = -float('Inf')
 
                 if top_p is not None and top_p > 0:
-                    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                    sorted_logits, sorted_indices = torch.sort(sample_logits, descending=True, dim=-1)
 
                     sorted_probs = F.softmax(sorted_logits, dim=-1)
                     cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
@@ -242,22 +258,30 @@ class GPT(nn.Module):
                     sorted_remove_mask[..., 1:] = sorted_remove_mask[..., :-1].clone()
                     sorted_remove_mask[..., 0] = False
 
-                    remove_mask = torch.zeros_like(logits, dtype=torch.bool)
+                    remove_mask = torch.zeros_like(sample_logits, dtype=torch.bool)
                     remove_mask.scatter_(
                         dim=-1,
                         index=sorted_indices,
                         src=sorted_remove_mask,
                     )
 
-                    logits = logits.masked_fill_(
+                    sample_logits = sample_logits.masked_fill_(
                         remove_mask,
                         -float("Inf")
                     )
 
-                probs = F.softmax(logits, dim=-1)
+                probs = F.softmax(sample_logits, dim=-1)
                 next_ids = torch.multinomial(probs, num_samples=1, generator=rng)
             else:
-                next_ids = torch.argmax(logits, dim=-1, keepdim=True)
+                next_ids = torch.argmax(sample_logits, dim=-1, keepdim=True)
+
+            # Update token frequency after generating the new token.
+            if token_counts is not None:
+                token_counts.scatter_add_(
+                    dim=-1,
+                    index=next_ids,
+                    src=torch.ones_like(next_ids, dtype=token_counts.dtype)
+                )
 
             token = next_ids.item()
             yield token
