@@ -25,12 +25,22 @@ class ClimbMixDataset(Dataset):
         self.data = []
 
     def load_data(self, buffer_round=0):
+        if len(self.data_list) == 0:
+            raise ValueError('No data found!')
+
         rng = random.Random(self.seed + buffer_round)
 
         data_list = rng.sample(
             self.data_list,
             k=min(self.buffer_size, len(self.data_list))
         )
+
+        # remove selected files
+        selected_set = set(data_list)
+        self.data_list = [
+            path for path in self.data_list
+            if path not in selected_set
+        ]
 
         self.data = []
         for path in data_list:
@@ -304,7 +314,7 @@ def smoltalk_gsm8k_dataloader(dataset, tokenizer, max_seq_len, batch_size=32, dd
         shuffle=shuffle,
         sampler=sampler,
         drop_last=True,
-        num_workers=4,
+        num_workers=0,
         collate_fn=partial(collate_fn_sft, tokenizer=tokenizer, max_seq_len=max_seq_len)
     )
     return loader, sampler
@@ -315,7 +325,8 @@ if __name__ == '__main__':
 
     tokenizer = get_tokenizer('../gpt-neox-20b-tokenizer')
     smoltalk_gsm8k_dataset = SmolTalkGSM8KDataset(
-        'D:/think-dataset/SmolTalk-GSM8K'
+        'D:/think-dataset/SmolTalk-GSM8K',
+        buffer_size=10
     )
     smoltalk_gsm8k_dataset.load_data(buffer_round=0)
 
