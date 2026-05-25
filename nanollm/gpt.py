@@ -8,12 +8,12 @@ import torch.nn.functional as F
 @dataclass
 class GPTConfig:
     vocab_size: int = 50286
-    max_seq_len: int = 512
-    model_dim: int = 640
-    n_layers: int = 12
-    n_heads: int = 10
-    n_kv_heads: int = 5
-    head_dim: int = 64
+    max_seq_len: int = 1024
+    model_dim: int = 1024
+    n_layers: int = 16
+    n_heads: int = 8
+    n_kv_heads: int = 4
+    head_dim: int = 128
 
 
 def norm(x):
@@ -159,7 +159,7 @@ class GPT(nn.Module):
             nn.init.uniform_(block.mlp.linear1.weight, -s, s)
             nn.init.zeros_(block.mlp.linear2.weight)
 
-    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None, dtype=torch.bfloat16):
+    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=100000, device=None, dtype=torch.bfloat16):
         if device is None:
             device = self.get_device()
         channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
