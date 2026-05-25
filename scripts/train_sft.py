@@ -19,7 +19,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 
-from nanollm.dataloader import SmolTalkGSM8KDataset, smoltalk_gsm8k_dataloader
+from nanollm.dataloader import LemonmindDataset, lemonmind_dataloader
 from nanollm.gpt import GPTConfig, GPT, Block
 from nanollm.tokenizer import get_tokenizer
 
@@ -93,7 +93,7 @@ def main():
         )
 
     # Tokenizer
-    tokenizer = get_tokenizer('/root/autodl-tmp/nano-llm/gpt-neox-20b-tokenizer')
+    tokenizer = get_tokenizer('/home/oem/ztw/nano-llm/gpt-neox-20b-tokenizer')
     vocab_size = len(tokenizer)
 
     if master:
@@ -101,8 +101,8 @@ def main():
 
     # Hyperparameters
     max_seq_len = 1024
-    micro_batch = 4
-    target_tokens = 118_433_280 * 1
+    micro_batch = 32
+    target_tokens = 287_535_104 * 10
     grad_accum = max(1, 256 // (world_size * micro_batch))
     global_batch_tokens = world_size * micro_batch * grad_accum * max_seq_len
     total_steps = target_tokens // global_batch_tokens
@@ -111,9 +111,9 @@ def main():
     lr = 5e-5
     weight_decay = 0.1
     log_steps = 100
-    save_steps = 1000
-    pretrain_model_path = 'model/pretrain_1.bin'
-    save_path = 'model/sft_1.bin'
+    save_steps = 500
+    pretrain_model_path = 'model/pretrain/nano-llm-flash.bin'
+    save_path = 'model/sft/nano-llm-flash.bin'
 
     if master:
         logger.info(
@@ -125,10 +125,11 @@ def main():
     config = GPTConfig()
     config.vocab_size = vocab_size
     config.max_seq_len = max_seq_len
-    config.model_dim = 640
-    config.n_layers = 12
-    config.n_heads = 10
-    config.n_kv_heads = 5
+    config.model_dim = 1024
+    config.n_layers = 16
+    config.n_heads = 8
+    config.n_kv_heads = 4
+    config.head_dim = 128
 
     bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
@@ -142,12 +143,12 @@ def main():
             reduce_dtype=amp_dtype,
             buffer_dtype=amp_dtype,
         )
-        warp_policy = ModuleWrapPolicy({Block})
+        wrap_policy = ModuleWrapPolicy({Block})
         model = FSDP(
             model,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
             mixed_precision=mp_policy,
-            auto_wrap_policy=warp_policy,
+            auto_wrap_policy=wrap_policy,
             device_id=local_rank
         )
     else:
@@ -192,12 +193,13 @@ def main():
             logger.info(f"Resuming from step {start_step:,}")
 
     # Dataset | Dataloader
-    train_dataset = SmolTalkGSM8KDataset(
-        '/root/autodl-tmp/SmolTalk-GSM8K',
-        buffer_size=5
+    train_dataset = LemonmindDataset(
+        # '/root/autodl-tmp/SmolTalk-GSM8K',
+        '/home/oem/ztw/SmolTalk-GSM8K',
+        buffer_size=10
     )
     train_dataset.load_data(buffer_round)
-    train_loader, train_sampler = smoltalk_gsm8k_dataloader(
+    train_loader, train_sampler = lemonmind_dataloader(
         train_dataset,
         tokenizer=tokenizer,
         max_seq_len=max_seq_len+1,
@@ -297,7 +299,7 @@ def main():
         if step < total_steps:
             buffer_round += 1
             train_dataset.load_data(buffer_round)
-            train_loader, train_sampler = smoltalk_gsm8k_dataloader(
+            train_loader, train_sampler = lemonmind_dataloader(
                 train_dataset, tokenizer, max_seq_len+1, micro_batch, ddp, rank, world_size
             )
             if master:

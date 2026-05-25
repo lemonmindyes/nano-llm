@@ -101,10 +101,13 @@ def climb_mix_dataloader(dataset, tokenizer, max_seq_len, batch_size=32, ddp=Fal
     return loader, sampler
 
 
-class SmolTalkGSM8KDataset(Dataset):
-    def __init__(self, data_path, buffer_size=5, seed=42):
+class LemonmindDataset(Dataset):
+    def __init__(self, data_path, buffer_size=10, seed=42):
         super().__init__()
-        self.data_list = [str(v) for v in Path(data_path).rglob('*.parquet')]
+        self.data_list = sorted(
+            [str(v) for v in Path(data_path).rglob("*.parquet")]
+        )
+        self.letters = ['A', 'B', 'C', 'D']
 
         self.buffer_size = buffer_size
         self.seed = seed
@@ -123,17 +126,49 @@ class SmolTalkGSM8KDataset(Dataset):
             if content is None:
                 continue
 
+            content = str(content).strip()
+
+            if len(content) == 0:
+                continue
+
             cleaned.append({
                 'role': role,
-                'content': str(content)
+                'content': content
             })
 
         while len(cleaned) > 0 and cleaned[-1]['role'] != 'assistant':
             cleaned.pop()
 
-        has_assistant = any(v['role'] == 'assistant' for v in cleaned)
+        if len(cleaned) == 0:
+            return None
 
-        if not has_assistant:
+        # system 只允许出现在第一条
+        start_idx = 0
+
+        if cleaned[0]['role'] == 'system':
+            start_idx = 1
+
+        if start_idx >= len(cleaned):
+            return None
+
+        # system 后必须是 user，不能直接 assistant
+        if cleaned[start_idx]['role'] != 'user':
+            return None
+
+        # user / assistant 必须交替
+        expected_role = 'user'
+
+        for msg in cleaned[start_idx:]:
+            if msg['role'] != expected_role:
+                return None
+
+            if expected_role == 'user':
+                expected_role = 'assistant'
+            else:
+                expected_role = 'user'
+
+        # 最后一条必须是 assistant
+        if cleaned[-1]['role'] != 'assistant':
             return None
 
         return cleaned
@@ -152,7 +187,7 @@ class SmolTalkGSM8KDataset(Dataset):
             dataset_name = path_obj.parent.name
             df = pd.read_parquet(path)
 
-            if dataset_name == 'GSM8K':
+            if dataset_name == 'gsm8k':
                 for row in df.itertuples(index=False):
                     messages = [
                         {
@@ -171,9 +206,47 @@ class SmolTalkGSM8KDataset(Dataset):
                         self.data.append({
                             'messages': messages
                         })
-            elif dataset_name == 'SmolTalk':
+            elif dataset_name == 'smoltalk':
                 for row in df.itertuples(index=False):
                     messages = getattr(row, 'messages')
+
+                    if hasattr(messages, 'tolist'):
+                        messages = messages.tolist()
+                    else:
+                        messages = list(messages)
+
+                    messages = self._clean_messages(messages)
+
+                    if messages is not None:
+                        self.data.append({
+                            'messages': messages
+                        })
+            elif dataset_name == 'mmlu':
+                for row in df.itertuples(index=False):
+                    question = getattr(row, 'question')
+                    choices = getattr(row, 'choices')
+                    answer = getattr(row, 'answer')
+                    query = f'Multiple Choice question: {question}\n'
+                    query += "".join([f"{letter}. {c}\n" for letter, c in zip(self.letters, choices)])
+                    query += f'\nRespond only with the letter of the correct answer.'
+                    messages = [
+                        {
+                            'role': 'user',
+                            'content': query
+                        },
+                        {
+                            'role': 'assistant',
+                            'content': self.letters[answer]
+                        }
+                    ]
+                    messages = self._clean_messages(messages)
+                    if messages is not None:
+                        self.data.append({
+                            'messages': messages
+                        })
+            elif dataset_name == 'nano_llm_custom_identity':
+                for row in df.itertuples(index=False):
+                    messages = getattr(row, "text")
 
                     if hasattr(messages, 'tolist'):
                         messages = messages.tolist()
@@ -293,7 +366,7 @@ def collate_fn_sft(batch, tokenizer, max_seq_len):
     return x, y, loss_mask
 
 
-def smoltalk_gsm8k_dataloader(dataset, tokenizer, max_seq_len, batch_size=32, ddp=False, rank=0, world_size=1, seed=42):
+def lemonmind_dataloader(dataset, tokenizer, max_seq_len, batch_size=32, ddp=False, rank=0, world_size=1, seed=42):
     if ddp:
         sampler = DistributedSampler(
             dataset,
@@ -324,13 +397,14 @@ if __name__ == '__main__':
     from tokenizer import get_tokenizer
 
     tokenizer = get_tokenizer('../gpt-neox-20b-tokenizer')
-    smoltalk_gsm8k_dataset = SmolTalkGSM8KDataset(
-        'D:/think-dataset/SmolTalk-GSM8K',
+    lemonmind_dataset = LemonmindDataset(
+        'D:/think-dataset/sft',
         buffer_size=10
     )
-    smoltalk_gsm8k_dataset.load_data(buffer_round=0)
+    lemonmind_dataset.load_data(buffer_round=0)
+    print(len(lemonmind_dataset))
 
-    train_dataloader, train_sampler = smoltalk_gsm8k_dataloader(smoltalk_gsm8k_dataset,
+    train_dataloader, train_sampler = lemonmind_dataloader(lemonmind_dataset,
                                                  tokenizer,
                                                  max_seq_len=1024+1,
                                                  batch_size=32
